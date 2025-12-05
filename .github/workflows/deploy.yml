@@ -8,48 +8,45 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write       # required if using OIDC for role assumption
+      contents: read        # for checkout
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1        # **Hardcoded AWS region** you use
+          # Optionally assume a role:
+          # role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/<YourRole>
+          # If you are not using role assumption, ensure the runner (or your secrets) provide AWS access keys.
+      
       - name: Deploy to Backend EC2
         uses: appleboy/ssh-action@v1.0.0
         env:
           BACKEND_HOST: ${{ secrets.BACKEND_HOST }}
           RDS_ENDPOINT: ${{ secrets.RDS_ENDPOINT }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+          # No need to set AWS_REGION here — AWS_AN credentials are already configured
         with:
           host: ${{ secrets.BACKEND_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             set -e
-            
             cd /var/www/backend
-            
             echo "Starting deployment..."
             
-            # Pull latest changes first
+            # Pull latest code
             if [ ! -d .git ]; then
-              echo "Error: /var/www/backend is not a Git repository. Clone it first."
+              echo "Error: /var/www/backend is not a Git repository."
               exit 1
             fi
             git pull origin 12.x || { echo "Git pull failed"; exit 1; }
             
-            # Set up .env BEFORE composer install
-            if [ ! -f .env.example ]; then
-              echo "Warning: .env.example not found. Creating basic .env."
-              touch .env
-              echo "APP_NAME=Laravel" >> .env
-              echo "APP_ENV=production" >> .env
-              echo "APP_KEY=" >> .env
-              echo "APP_DEBUG=false" >> .env
-              echo "APP_URL=http://$BACKEND_HOST" >> .env
-              echo "DB_CONNECTION=mysql" >> .env
-              echo "DB_HOST=$RDS_ENDPOINT" >> .env
-              echo "DB_PORT=3306" >> .env
-              echo "DB_DATABASE=taskdb" >> .env
-            else
+            # Prepare .env
+            if [ -f .env.example ]; then
               cp .env.example .env
               sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
               sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
@@ -58,36 +55,33 @@ jobs:
               sed -i "s/DB_HOST=.*/DB_HOST=$RDS_ENDPOINT/" .env
               sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
               sed -i 's/DB_DATABASE=.*/DB_DATABASE=taskdb/' .env
+            else
+              # fallback minimal .env if example missing
+              echo "APP_ENV=production" > .env
+              echo "APP_DEBUG=false" >> ..env
+              echo "APP_URL=http://$BACKEND_HOST" >> .env
+              echo "DB_CONNECTION=mysql" >> .env
+              echo "DB_HOST=$RDS_ENDPOINT" >> .env
+              echo "DB_PORT=3306" >> .env
+              echo "DB_DATABASE=taskdb" >> .env
             fi
             
-            # Export AWS region for CLI
-            export AWS_DEFAULT_REGION="$AWS_REGION"
-            
-            # Fetch RDS creds and update .env
+            # Fetch DB credentials from AWS Secrets Manager
             RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }
-            DB_USER=$(echo $RDS_CREDS | jq -r .username)
-            DB_PASS=$(echo $RDS_CREDS | jq -r .password)
+            DB_USER=$(echo "$RDS_CREDS" | jq -r .username)
+            DB_PASS=$(echo "$RDS_CREDS" | jq -r .password)
             sed -i "s/DB_USERNAME=.*/DB_USERNAME=$DB_USER/" .env
             sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
             
-            # Clear any stale config
-            php artisan config:clear || { echo "Artisan config:clear failed"; exit 1; }
-            
-            # Now install dependencies
+            # Install dependencies and deploy
             if [ ! -f composer.json ]; then
-              echo "Error: composer.json not found in repo."
+              echo "Error: composer.json missing"
               exit 1
             fi
             composer install --no-dev --optimize-autoloader || { echo "Composer install failed"; exit 1; }
-            
-            # Generate key and cache config
-            php artisan key:generate || { echo "Artisan key:generate failed"; exit 1; }
-            php artisan config:cache || { echo "Artisan config:cache failed"; exit 1; }
-            
-            # Run migrations
-            php artisan migrate --force || { echo "Artisan migrate failed"; exit 1; }
-            
-            # Restart Nginx
+            php artisan key:generate || { echo "Key generation failed"; exit 1; }
+            php artisan config:cache || { echo "Config cache failed"; exit 1; }
+            php artisan migrate --force || { echo "Migrate failed"; exit 1; }
             sudo systemctl restart nginx || { echo "Nginx restart failed"; exit 1; }
             
             echo "Deployment completed successfully."
