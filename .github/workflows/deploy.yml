@@ -40,7 +40,6 @@ jobs:
               sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
               sed -i "s/DB_HOST=.*/DB_HOST=$RDS_ENDPOINT/" .env
               sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
-              sed -i 's/DB_DATABASE=.*/DB_DATABASE=taskdb/' .env
             else
               # fallback minimal .env
               echo "APP_ENV=production" > .env
@@ -48,7 +47,6 @@ jobs:
               echo "DB_CONNECTION=mysql" >> .env
               echo "DB_HOST=$RDS_ENDPOINT" >> .env
               echo "DB_PORT=3306" >> .env
-              echo "DB_DATABASE=taskdb" >> .env
             fi
 
             # Determine BACKEND_HOST
@@ -70,8 +68,15 @@ jobs:
             RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }
             DB_USER=$(echo "$RDS_CREDS" | jq -r .username)
             DB_PASS=$(echo "$RDS_CREDS" | jq -r .password)
+
+            # Ensure database exists
+            echo "Creating database if it doesn't exist..."
+            mysql -h "$RDS_ENDPOINT" -u "$DB_USER" -p"$DB_PASS" -e "CREATE DATABASE IF NOT EXISTS taskdb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" || { echo "Cannot create database"; exit 1; }
+
+            # Update .env with DB credentials
             sed -i "s/DB_USERNAME=.*/DB_USERNAME=$DB_USER/" .env
             sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
+            sed -i "s/DB_DATABASE=.*/DB_DATABASE=taskdb/" .env
 
             # Clear Laravel config
             php artisan config:clear || { echo "Artisan config:clear failed"; exit 1; }
@@ -86,6 +91,13 @@ jobs:
             # Generate key and cache config
             php artisan key:generate || { echo "Artisan key:generate failed"; exit 1; }
             php artisan config:cache || { echo "Artisan config:cache failed"; exit 1; }
+
+            # Test DB connection before migrations
+            echo "Testing DB connection..."
+            if ! mysql -h "$RDS_ENDPOINT" -u "$DB_USER" -p"$DB_PASS" -e "SELECT 1;" ; then
+              echo "Cannot connect to DB. Check endpoint, port, security group, and credentials."
+              exit 1
+            fi
 
             # Run migrations
             php artisan migrate --force || { echo "Artisan migrate failed"; exit 1; }
