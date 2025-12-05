@@ -15,8 +15,9 @@ jobs:
       - name: Deploy to Backend EC2
         uses: appleboy/ssh-action@v1.0.0
         env:
-          BACKEND_HOST: ${{ secrets.BACKEND_HOST }}
-          RDS_ENDPOINT: ${{ secrets.RDS_ENDPOINT }}
+          BACKEND_HOST: ""  # leave empty to auto-detect EC2 public IP
+          RDS_ENDPOINT: ${{ secrets.RDS_ENDPOINT }}  # from GitHub secret
+          AWS_REGION: "us-east-1"  # default region for AWS CLI
         with:
           host: ${{ secrets.BACKEND_HOST }}
           username: ubuntu
@@ -33,7 +34,7 @@ jobs:
             fi
             git pull origin 12.x || { echo "Git pull failed"; exit 1; }
 
-            # Determine BACKEND_HOST
+            # Detect BACKEND_HOST if empty
             if [ -z "$BACKEND_HOST" ]; then
               echo "BACKEND_HOST is empty, detecting public IP..."
               BACKEND_HOST=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
@@ -44,55 +45,49 @@ jobs:
             fi
             echo "Using BACKEND_HOST: $BACKEND_HOST"
 
-            # Set AWS region
-            export AWS_DEFAULT_REGION=us-east-1  # Replace with your secret's region
-
-            # Fetch DB credentials from AWS Secrets Manager
-            RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }
-            echo "DEBUG: RDS_CREDS=$RDS_CREDS"
-
-            DB_USER=$(echo "$RDS_CREDS" | jq -r .username)
-            DB_PASS=$(echo "$RDS_CREDS" | jq -r .password)
-
-            if [ -z "$RDS_ENDPOINT" ] || [ -z "$DB_USER" ] || [ -z "$DB_PASS" ]; then
-              echo "RDS_ENDPOINT, DB_USER, or DB_PASS is empty!"
-              exit 1
-            fi
-            echo "Using RDS_ENDPOINT: $RDS_ENDPOINT"
-
-            # Ensure MySQL client is installed
+            # Install MySQL client if missing
             if ! command -v mysql &> /dev/null; then
               echo "MySQL client not found, installing..."
               sudo apt-get update -y
               sudo apt-get install -y mysql-client
             fi
 
-            # Create database if missing on RDS
+            # Fetch RDS username/password from AWS Secrets Manager
+            echo "Fetching RDS credentials from AWS Secrets Manager..."
+            export AWS_DEFAULT_REGION="$AWS_REGION"
+            RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }
+            DB_USER=$(echo $RDS_CREDS | jq -r .username)
+            DB_PASS=$(echo $RDS_CREDS | jq -r .password)
+
+            if [ -z "$RDS_ENDPOINT" ] || [ -z "$DB_USER" ] || [ -z "$DB_PASS" ]; then
+              echo "RDS_ENDPOINT, DB_USER, or DB_PASS is empty!"
+              exit 1
+            fi
+
+            # Create database if missing
             echo "Creating database on RDS if it doesn't exist..."
             mysql -h "$RDS_ENDPOINT" -P 3306 -u "$DB_USER" -p"$DB_PASS" -e "CREATE DATABASE IF NOT EXISTS taskdb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" || { echo "Cannot create database on RDS"; exit 1; }
 
             # Prepare .env
             if [ -f .env.example ]; then
               cp .env.example .env
-              sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
-              sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
-              sed -i "s|APP_URL=.*|APP_URL=http://$BACKEND_HOST|" .env
             else
-              echo "APP_ENV=production" > .env
-              echo "APP_DEBUG=false" >> .env
-              echo "APP_URL=http://$BACKEND_HOST" >> .env
-              echo "DB_CONNECTION=mysql" >> .env
+              touch .env
             fi
 
-            sed -i "s/DB_HOST=.*/DB_HOST=$RDS_ENDPOINT/" .env
-            sed -i "s/DB_DATABASE=.*/DB_DATABASE=taskdb/" .env
-            sed -i "s/DB_USERNAME=.*/DB_USERNAME=$DB_USER/" .env
-            sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
+            sed -i 's/APP_ENV=.*/APP_ENV=production/' .env || echo "APP_ENV=production" >> .env
+            sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env || echo "APP_DEBUG=false" >> .env
+            sed -i "s|APP_URL=.*|APP_URL=http://$BACKEND_HOST|" .env || echo "APP_URL=http://$BACKEND_HOST" >> .env
+            sed -i "s/DB_CONNECTION=.*/DB_CONNECTION=mysql/" .env || echo "DB_CONNECTION=mysql" >> .env
+            sed -i "s/DB_HOST=.*/DB_HOST=$RDS_ENDPOINT/" .env || echo "DB_HOST=$RDS_ENDPOINT" >> .env
+            sed -i "s/DB_DATABASE=.*/DB_DATABASE=taskdb/" .env || echo "DB_DATABASE=taskdb" >> .env
+            sed -i "s/DB_USERNAME=.*/DB_USERNAME=$DB_USER/" .env || echo "DB_USERNAME=$DB_USER" >> .env
+            sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env || echo "DB_PASSWORD=$DB_PASS" >> .env
 
             # Clear Laravel config
             php artisan config:clear || { echo "Artisan config:clear failed"; exit 1; }
 
-            # Install dependencies
+            # Install composer dependencies
             if [ ! -f composer.json ]; then
               echo "Error: composer.json missing"
               exit 1
