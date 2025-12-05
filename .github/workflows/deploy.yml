@@ -24,16 +24,29 @@ jobs:
           script: |
             set -e  # Exit on any error for better debugging
             
-            cd /var/www/backend
-            
             # Log start
             echo "Starting deployment..."
             
-            # Check if directory is a Git repo and pull latest changes
-            if [ ! -d .git ]; then
-              echo "Error: /var/www/backend is not a Git repository. Clone it first."
-              exit 1
+            # Ensure /var/www/backend directory exists and is set up
+            if [ ! -d /var/www/backend ]; then
+              echo "Directory /var/www/backend does not exist. Creating it..."
+              sudo mkdir -p /var/www/backend
+              sudo chown -R ubuntu:ubuntu /var/www/backend
             fi
+            
+            cd /var/www/backend
+            
+            # Check if directory is a Git repo; if not, clone it
+            if [ ! -d .git ]; then
+              echo "/var/www/backend is not a Git repository. Cloning from GitHub..."
+              # Remove any existing non-repo contents to avoid conflicts
+              sudo rm -rf /var/www/backend/*
+              git clone https://github.com/SalahSleem/laravel.git . || { echo "Git clone failed"; exit 1; }
+              git checkout 12.x || { echo "Git checkout to 12.x failed"; exit 1; }
+              sudo chown -R ubuntu:ubuntu /var/www/backend
+            fi
+            
+            # Pull latest changes
             git pull origin 12.x || { echo "Git pull failed"; exit 1; }
             
             # Check for composer.json and install dependencies
