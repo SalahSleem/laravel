@@ -44,8 +44,7 @@ jobs:
             # Ensure AWS CLI uses the default region
             export AWS_REGION=us-east-1
             
-            RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }
-            DB_USER=$(echo $RDS_CREDS | jq -r .username)
+            RDS_CREDS=$(aws secretsmanager get-secret-value --region us-east-1 --secret-id task/rds/creds --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }            DB_USER=$(echo $RDS_CREDS | jq -r .username)
             DB_PASS=$(echo $RDS_CREDS | jq -r .password)
             
             if [ ! -f .env.example ]; then
