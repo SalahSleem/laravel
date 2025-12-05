@@ -9,44 +9,57 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      # Step 1: Checkout the code
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Step 2: Deploy to Backend EC2
       - name: Deploy to Backend EC2
         uses: appleboy/ssh-action@v1.0.0
         env:
           BACKEND_HOST: ${{ secrets.BACKEND_HOST }}
           RDS_ENDPOINT: ${{ secrets.RDS_ENDPOINT }}
-          AWS_REGION: us-east-1  # <-- Hardcoded default region
+          AWS_REGION: us-east-1  # Hardcoded default AWS region
         with:
           host: ${{ secrets.BACKEND_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             set -e
-            
+
             cd /var/www/backend
-            
+
             echo "Starting deployment..."
-            
+
+            # Ensure it's a git repo
             if [ ! -d .git ]; then
               echo "Error: /var/www/backend is not a Git repository. Clone it first."
               exit 1
             fi
+
+            # Pull latest code from 12.x branch
             git pull origin 12.x || { echo "Git pull failed"; exit 1; }
-            
+
+            # Check composer.json exists
             if [ ! -f composer.json ]; then
               echo "Error: composer.json not found in repo."
               exit 1
             fi
+
+            # Install PHP dependencies
             composer install --no-dev --optimize-autoloader || { echo "Composer install failed"; exit 1; }
-            
-            # Ensure AWS CLI uses the default region
-            export AWS_REGION=us-east-1
-            
-            RDS_CREDS=$(aws secretsmanager get-secret-value --region us-east-1 --secret-id task/rds/creds --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }            DB_USER=$(echo $RDS_CREDS | jq -r .username)
-            DB_PASS=$(echo $RDS_CREDS | jq -r .password)
-            
+
+            # Fetch RDS credentials from AWS Secrets Manager
+            RDS_CREDS=$(aws secretsmanager get-secret-value --region us-east-1 --secret-id task/rds/creds --query SecretString --output text)
+            if [ $? -ne 0 ]; then
+              echo "AWS Secrets Manager failed"
+              exit 1
+            fi
+
+            DB_USER=$(echo "$RDS_CREDS" | jq -r .username)
+            DB_PASS=$(echo "$RDS_CREDS" | jq -r .password)
+
+            # Ensure .env file exists
             if [ ! -f .env.example ]; then
               echo "Error: .env.example not found in repo."
               exit 1
@@ -54,6 +67,8 @@ jobs:
             if [ ! -f .env ]; then
               cp .env.example .env
             fi
+
+            # Update environment variables
             sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
             sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
             sed -i "s|APP_URL=.*|APP_URL=http://$BACKEND_HOST|" .env
@@ -63,12 +78,13 @@ jobs:
             sed -i 's/DB_DATABASE=.*/DB_DATABASE=taskdb/' .env
             sed -i "s/DB_USERNAME=.*/DB_USERNAME=$DB_USER/" .env
             sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
-            
+
+            # Laravel commands
             php artisan key:generate || { echo "Artisan key:generate failed"; exit 1; }
             php artisan config:cache || { echo "Artisan config:cache failed"; exit 1; }
-            
             php artisan migrate --force || { echo "Artisan migrate failed"; exit 1; }
-            
+
+            # Restart web server
             sudo systemctl restart nginx || { echo "Nginx restart failed"; exit 1; }
-            
+
             echo "Deployment completed successfully."
