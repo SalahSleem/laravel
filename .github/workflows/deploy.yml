@@ -8,27 +8,14 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write       # required if using OIDC for role assumption
-      contents: read        # for checkout
     steps:
+      # Step 1: Checkout the code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-region: us-east-1        # **Hardcoded AWS region** you use
-          # Optionally assume a role:
-          # role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/<YourRole>
-          # If you are not using role assumption, ensure the runner (or your secrets) provide AWS access keys.
-      
+      # Step 2: Deploy to backend server via SSH
       - name: Deploy to Backend EC2
         uses: appleboy/ssh-action@v1.0.0
-        env:
-          BACKEND_HOST: ${{ secrets.BACKEND_HOST }}
-          RDS_ENDPOINT: ${{ secrets.RDS_ENDPOINT }}
-          # No need to set AWS_REGION here — AWS_AN credentials are already configured
         with:
           host: ${{ secrets.BACKEND_HOST }}
           username: ubuntu
@@ -37,14 +24,14 @@ jobs:
             set -e
             cd /var/www/backend
             echo "Starting deployment..."
-            
+
             # Pull latest code
             if [ ! -d .git ]; then
-              echo "Error: /var/www/backend is not a Git repository."
+              echo "Error: Not a Git repository."
               exit 1
             fi
             git pull origin 12.x || { echo "Git pull failed"; exit 1; }
-            
+
             # Prepare .env
             if [ -f .env.example ]; then
               cp .env.example .env
@@ -56,32 +43,44 @@ jobs:
               sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
               sed -i 's/DB_DATABASE=.*/DB_DATABASE=taskdb/' .env
             else
-              # fallback minimal .env if example missing
+              # fallback minimal .env
               echo "APP_ENV=production" > .env
-              echo "APP_DEBUG=false" >> ..env
+              echo "APP_DEBUG=false" >> .env
               echo "APP_URL=http://$BACKEND_HOST" >> .env
               echo "DB_CONNECTION=mysql" >> .env
               echo "DB_HOST=$RDS_ENDPOINT" >> .env
               echo "DB_PORT=3306" >> .env
               echo "DB_DATABASE=taskdb" >> .env
             fi
-            
-            # Fetch DB credentials from AWS Secrets Manager
+
+            # Set AWS region so EC2 IAM role works
+            export AWS_DEFAULT_REGION=us-east-1
+
+            # Fetch RDS credentials from Secrets Manager
             RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }
             DB_USER=$(echo "$RDS_CREDS" | jq -r .username)
             DB_PASS=$(echo "$RDS_CREDS" | jq -r .password)
             sed -i "s/DB_USERNAME=.*/DB_USERNAME=$DB_USER/" .env
             sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
-            
-            # Install dependencies and deploy
+
+            # Clear config cache
+            php artisan config:clear || { echo "Artisan config:clear failed"; exit 1; }
+
+            # Install dependencies
             if [ ! -f composer.json ]; then
               echo "Error: composer.json missing"
               exit 1
             fi
             composer install --no-dev --optimize-autoloader || { echo "Composer install failed"; exit 1; }
+
+            # Generate app key and cache config
             php artisan key:generate || { echo "Key generation failed"; exit 1; }
             php artisan config:cache || { echo "Config cache failed"; exit 1; }
+
+            # Run migrations
             php artisan migrate --force || { echo "Migrate failed"; exit 1; }
+
+            # Restart Nginx
             sudo systemctl restart nginx || { echo "Nginx restart failed"; exit 1; }
-            
+
             echo "Deployment completed successfully."
