@@ -3,7 +3,7 @@ name: Deploy Backend (Laravel)
 on:
   push:
     branches:
-      - 12.x
+      - 12.x  # Ensure this branch exists in https://github.com/SalahSleem/laravel
 
 jobs:
   deploy:
@@ -14,37 +14,66 @@ jobs:
 
       - name: Deploy to Backend EC2
         uses: appleboy/ssh-action@v1.0.0
+        env:
+          BACKEND_HOST: ${{ secrets.BACKEND_HOST }}
+          RDS_ENDPOINT: ${{ secrets.RDS_ENDPOINT }}
         with:
           host: ${{ secrets.BACKEND_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            set -e  # Exit on any error for better debugging
+            
             cd /var/www/backend
-            # Pull latest changes
-            git pull origin 12.x
-            # Install dependencies
-            composer install --no-dev --optimize-autoloader
+            
+            # Log start
+            echo "Starting deployment..."
+            
+            # Check if directory is a Git repo and pull latest changes
+            if [ ! -d .git ]; then
+              echo "Error: /var/www/backend is not a Git repository. Clone it first."
+              exit 1
+            fi
+            git pull origin 12.x || { echo "Git pull failed"; exit 1; }
+            
+            # Check for composer.json and install dependencies
+            if [ ! -f composer.json ]; then
+              echo "Error: composer.json not found in repo."
+              exit 1
+            fi
+            composer install --no-dev --optimize-autoloader || { echo "Composer install failed"; exit 1; }
+            
             # Fetch RDS creds from Secrets Manager
-            RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --query SecretString --output text)
+            RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }
             DB_USER=$(echo $RDS_CREDS | jq -r .username)
             DB_PASS=$(echo $RDS_CREDS | jq -r .password)
+            
             # Create/update .env
+            if [ ! -f .env.example ]; then
+              echo "Error: .env.example not found in repo."
+              exit 1
+            fi
             if [ ! -f .env ]; then
               cp .env.example .env
             fi
             sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
             sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
-            sed -i 's|APP_URL=.*|APP_URL=http://'${{ secrets.BACKEND_HOST }}'|' .env
+            sed -i "s|APP_URL=.*|APP_URL=http://$BACKEND_HOST|" .env
             sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
-            sed -i 's/DB_HOST=.*/DB_HOST=${{ secrets.RDS_ENDPOINT }}/' .env  # Add RDS_ENDPOINT as a GitHub secret with the full endpoint
+            sed -i "s/DB_HOST=.*/DB_HOST=$RDS_ENDPOINT/" .env
             sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
             sed -i 's/DB_DATABASE=.*/DB_DATABASE=taskdb/' .env
-            sed -i 's/DB_USERNAME=.*/DB_USERNAME='$DB_USER'/' .env
-            sed -i 's/DB_PASSWORD=.*/DB_PASSWORD='$DB_PASS'/' .env
+            sed -i "s/DB_USERNAME=.*/DB_USERNAME=$DB_USER/" .env
+            sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
+            
             # Generate app key and cache config
-            php artisan key:generate
-            php artisan config:cache
-            # Run migrations
-            php artisan migrate --force
+            php artisan key:generate || { echo "Artisan key:generate failed"; exit 1; }
+            php artisan config:cache || { echo "Artisan config:cache failed"; exit 1; }
+            
+            # Run migrations (force for production)
+            php artisan migrate --force || { echo "Artisan migrate failed"; exit 1; }
+            
             # Restart Nginx
-            sudo systemctl restart nginx
+            sudo systemctl restart nginx || { echo "Nginx restart failed"; exit 1; }
+            
+            echo "Deployment completed successfully."
