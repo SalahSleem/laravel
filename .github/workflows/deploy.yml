@@ -37,7 +37,6 @@ jobs:
               cp .env.example .env
               sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
               sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
-              sed -i "s|APP_URL=.*|APP_URL=http://$BACKEND_HOST|" .env
               sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
               sed -i "s/DB_HOST=.*/DB_HOST=$RDS_ENDPOINT/" .env
               sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
@@ -46,14 +45,25 @@ jobs:
               # fallback minimal .env
               echo "APP_ENV=production" > .env
               echo "APP_DEBUG=false" >> .env
-              echo "APP_URL=http://$BACKEND_HOST" >> .env
               echo "DB_CONNECTION=mysql" >> .env
               echo "DB_HOST=$RDS_ENDPOINT" >> .env
               echo "DB_PORT=3306" >> .env
               echo "DB_DATABASE=taskdb" >> .env
             fi
 
-            # Set AWS region so EC2 IAM role works
+            # Determine BACKEND_HOST
+            if [ -z "$BACKEND_HOST" ]; then
+              echo "BACKEND_HOST is empty, detecting public IP..."
+              BACKEND_HOST=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+              if [ -z "$BACKEND_HOST" ]; then
+                echo "Cannot detect public IP. Falling back to localhost."
+                BACKEND_HOST=localhost
+              fi
+            fi
+            echo "Using BACKEND_HOST: $BACKEND_HOST"
+            sed -i "s|APP_URL=.*|APP_URL=http://$BACKEND_HOST|" .env
+
+            # Set AWS region for IAM role
             export AWS_DEFAULT_REGION=us-east-1
 
             # Fetch RDS credentials from Secrets Manager
@@ -63,7 +73,7 @@ jobs:
             sed -i "s/DB_USERNAME=.*/DB_USERNAME=$DB_USER/" .env
             sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
 
-            # Clear config cache
+            # Clear Laravel config
             php artisan config:clear || { echo "Artisan config:clear failed"; exit 1; }
 
             # Install dependencies
@@ -73,12 +83,12 @@ jobs:
             fi
             composer install --no-dev --optimize-autoloader || { echo "Composer install failed"; exit 1; }
 
-            # Generate app key and cache config
-            php artisan key:generate || { echo "Key generation failed"; exit 1; }
-            php artisan config:cache || { echo "Config cache failed"; exit 1; }
+            # Generate key and cache config
+            php artisan key:generate || { echo "Artisan key:generate failed"; exit 1; }
+            php artisan config:cache || { echo "Artisan config:cache failed"; exit 1; }
 
             # Run migrations
-            php artisan migrate --force || { echo "Migrate failed"; exit 1; }
+            php artisan migrate --force || { echo "Artisan migrate failed"; exit 1; }
 
             # Restart Nginx
             sudo systemctl restart nginx || { echo "Nginx restart failed"; exit 1; }
