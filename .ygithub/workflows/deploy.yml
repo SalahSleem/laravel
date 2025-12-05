@@ -1,0 +1,50 @@
+name: Deploy Backend (Laravel)
+
+on:
+  push:
+    branches:
+      - 12.x
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Backend EC2
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.BACKEND_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/backend
+            # Pull latest changes
+            git pull origin main
+            # Install dependencies
+            composer install --no-dev --optimize-autoloader
+            # Fetch RDS creds from Secrets Manager
+            RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --query SecretString --output text)
+            DB_USER=$(echo $RDS_CREDS | jq -r .username)
+            DB_PASS=$(echo $RDS_CREDS | jq -r .password)
+            # Create/update .env
+            if [ ! -f .env ]; then
+              cp .env.example .env
+            fi
+            sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
+            sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
+            sed -i 's|APP_URL=.*|APP_URL=http://'${{ secrets.BACKEND_HOST }}'|' .env
+            sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
+            sed -i 's/DB_HOST=.*/DB_HOST=${{ secrets.RDS_ENDPOINT }}/' .env  # Add RDS_ENDPOINT as a GitHub secret with the full endpoint
+            sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
+            sed -i 's/DB_DATABASE=.*/DB_DATABASE=taskdb/' .env
+            sed -i 's/DB_USERNAME=.*/DB_USERNAME='$DB_USER'/' .env
+            sed -i 's/DB_PASSWORD=.*/DB_PASSWORD='$DB_PASS'/' .env
+            # Generate app key and cache config
+            php artisan key:generate
+            php artisan config:cache
+            # Run migrations
+            php artisan migrate --force
+            # Restart Nginx
+            sudo systemctl restart nginx
