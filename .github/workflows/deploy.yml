@@ -36,7 +36,7 @@ jobs:
             fi
             git pull origin 12.x || { echo "Git pull failed"; exit 1; }
             
-            # Set up .env BEFORE composer install (critical for package:discover)
+            # Set up .env BEFORE composer install
             if [ ! -f .env.example ]; then
               echo "Warning: .env.example not found. Creating basic .env."
               touch .env
@@ -60,6 +60,9 @@ jobs:
               sed -i 's/DB_DATABASE=.*/DB_DATABASE=taskdb/' .env
             fi
             
+            # Export AWS region for CLI
+            export AWS_DEFAULT_REGION="$AWS_REGION"
+            
             # Fetch RDS creds and update .env
             RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }
             DB_USER=$(echo $RDS_CREDS | jq -r .username)
@@ -70,7 +73,7 @@ jobs:
             # Clear any stale config
             php artisan config:clear || { echo "Artisan config:clear failed"; exit 1; }
             
-            # Now install dependencies (with valid .env)
+            # Now install dependencies
             if [ ! -f composer.json ]; then
               echo "Error: composer.json not found in repo."
               exit 1
