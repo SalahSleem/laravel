@@ -29,54 +29,62 @@ jobs:
             
             echo "Starting deployment..."
             
+            # Pull latest changes first
             if [ ! -d .git ]; then
               echo "Error: /var/www/backend is not a Git repository. Clone it first."
               exit 1
             fi
             git pull origin 12.x || { echo "Git pull failed"; exit 1; }
             
+            # Set up .env BEFORE composer install (critical for package:discover)
+            if [ ! -f .env.example ]; then
+              echo "Warning: .env.example not found. Creating basic .env."
+              touch .env
+              echo "APP_NAME=Laravel" >> .env
+              echo "APP_ENV=production" >> .env
+              echo "APP_KEY=" >> .env
+              echo "APP_DEBUG=false" >> .env
+              echo "APP_URL=http://$BACKEND_HOST" >> .env
+              echo "DB_CONNECTION=mysql" >> .env
+              echo "DB_HOST=$RDS_ENDPOINT" >> .env
+              echo "DB_PORT=3306" >> .env
+              echo "DB_DATABASE=taskdb" >> .env
+            else
+              cp .env.example .env
+              sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
+              sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
+              sed -i "s|APP_URL=.*|APP_URL=http://$BACKEND_HOST|" .env
+              sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
+              sed -i "s/DB_HOST=.*/DB_HOST=$RDS_ENDPOINT/" .env
+              sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
+              sed -i 's/DB_DATABASE=.*/DB_DATABASE=taskdb/' .env
+            fi
+            
+            # Fetch RDS creds and update .env
+            RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }
+            DB_USER=$(echo $RDS_CREDS | jq -r .username)
+            DB_PASS=$(echo $RDS_CREDS | jq -r .password)
+            sed -i "s/DB_USERNAME=.*/DB_USERNAME=$DB_USER/" .env
+            sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
+            
+            # Clear any stale config
+            php artisan config:clear || { echo "Artisan config:clear failed"; exit 1; }
+            
+            # Now install dependencies (with valid .env)
             if [ ! -f composer.json ]; then
               echo "Error: composer.json not found in repo."
               exit 1
             fi
             composer install --no-dev --optimize-autoloader || { echo "Composer install failed"; exit 1; }
             
-            RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }
-            DB_USER=$(echo $RDS_CREDS | jq -r .username)
-            DB_PASS=$(echo $RDS_CREDS | jq -r .password)
-            
-            if [ ! -f .env.example ]; then
-              echo "Error: .env.example not found in repo."
-              exit 1
-            fi
-            if [ ! -f .env ]; then
-              cp .env.example .env
-            fi
-            sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
-            sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
-            sed -i "s|APP_URL=.*|APP_URL=http://$BACKEND_HOST|" .env
-            sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
-            sed -i "s/DB_HOST=.*/DB_HOST=$RDS_ENDPOINT/" .env
-            sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
-            sed -i 's/DB_DATABASE=.*/DB_DATABASE=taskdb/' .env
-            sed -i "s/DB_USERNAME=.*/DB_USERNAME=$DB_USER/" .env
-            sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
-            
-            # Clear config cache to avoid stale values
-            php artisan config:clear || { echo "Artisan config:clear failed"; exit 1; }
-            
-            # Validate APP_URL (basic check)
-            APP_URL_VALUE=$(grep '^APP_URL=' .env | cut -d'=' -f2)
-            if ! echo "$APP_URL_VALUE" | grep -q '^http://'; then
-              echo "Error: APP_URL is invalid: $APP_URL_VALUE"
-              exit 1
-            fi
-            
+            # Generate key and cache config
             php artisan key:generate || { echo "Artisan key:generate failed"; exit 1; }
             php artisan config:cache || { echo "Artisan config:cache failed"; exit 1; }
             
+            # Run migrations
             php artisan migrate --force || { echo "Artisan migrate failed"; exit 1; }
             
+            # Restart Nginx
             sudo systemctl restart nginx || { echo "Nginx restart failed"; exit 1; }
             
             echo "Deployment completed successfully."
