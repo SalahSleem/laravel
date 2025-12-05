@@ -3,7 +3,7 @@ name: Deploy Backend (Laravel)
 on:
   push:
     branches:
-      - 12.x  # Ensure this branch exists in https://github.com/SalahSleem/laravel
+      - 12.x
 
 jobs:
   deploy:
@@ -17,75 +17,34 @@ jobs:
         env:
           BACKEND_HOST: ${{ secrets.BACKEND_HOST }}
           RDS_ENDPOINT: ${{ secrets.RDS_ENDPOINT }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}  # Ensure this secret is set in GitHub (e.g., us-east-1)
+          AWS_REGION: ${{ secrets.AWS_REGION }}  # <-- Add this line
         with:
           host: ${{ secrets.BACKEND_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            set -e  # Exit on any error for better debugging
-            
-            # Log start
-            echo "Starting deployment..."
-            
-            # Ensure /var/www/backend directory exists and is set up
-            if [ ! -d /var/www/backend ]; then
-              echo "Directory /var/www/backend does not exist. Creating it..."
-              sudo mkdir -p /var/www/backend
-              sudo chown -R ubuntu:ubuntu /var/www/backend
-            fi
+            set -e
             
             cd /var/www/backend
             
-            # Check if directory is a Git repo; if not, clone it
-            if [ ! -d .git ]; then
-              echo "/var/www/backend is not a Git repository. Cloning from GitHub..."
-              # Remove any existing non-repo contents to avoid conflicts
-              sudo rm -rf /var/www/backend/*
-              git clone https://github.com/SalahSleem/laravel.git . || { echo "Git clone failed"; exit 1; }
-              git checkout 12.x || { echo "Git checkout to 12.x failed"; exit 1; }
-              sudo chown -R ubuntu:ubuntu /var/www/backend
-            fi
+            echo "Starting deployment..."
             
-            # Pull latest changes
+            if [ ! -d .git ]; then
+              echo "Error: /var/www/backend is not a Git repository. Clone it first."
+              exit 1
+            fi
             git pull origin 12.x || { echo "Git pull failed"; exit 1; }
             
-            # Upgrade PHP to 8.2+ if necessary (required for Laravel 12.x)
-            echo "Checking and upgrading PHP version..."
-            PHP_VERSION=$(php -r "echo PHP_VERSION;")
-            if [[ "$(printf '%s\n' "$PHP_VERSION" "8.2.0" | sort -V | head -n1)" != "8.2.0" ]]; then
-              echo "PHP version $PHP_VERSION is too old. Upgrading to PHP 8.2..."
-              sudo apt update || { echo "Apt update failed"; exit 1; }
-              sudo apt install -y software-properties-common || { echo "Software properties install failed"; exit 1; }
-              sudo add-apt-repository -y ppa:ondrej/php || { echo "Adding PHP PPA failed"; exit 1; }
-              sudo apt update || { echo "Apt update after PPA failed"; exit 1; }
-              sudo apt install -y php8.2 php8.2-cli php8.2-common php8.2-mysql php8.2-xml php8.2-zip php8.2-curl php8.2-mbstring php8.2-bcmath php8.2-intl || { echo "PHP 8.2 install failed"; exit 1; }
-              # Set PHP 8.2 as default if multiple versions exist
-              sudo update-alternatives --set php /usr/bin/php8.2 || { echo "Setting PHP 8.2 as default failed"; exit 1; }
-              echo "PHP upgraded. New version: $(php -r 'echo PHP_VERSION;')"
-            else
-              echo "PHP version $PHP_VERSION is sufficient."
-            fi
-            
-            # Check for composer.json and install dependencies
             if [ ! -f composer.json ]; then
               echo "Error: composer.json not found in repo."
               exit 1
             fi
             composer install --no-dev --optimize-autoloader || { echo "Composer install failed"; exit 1; }
             
-            # Check if AWS_REGION is set
-            if [ -z "$AWS_REGION" ]; then
-              echo "Error: AWS_REGION is not set. Please add the AWS_REGION secret in GitHub (e.g., us-east-1)."
-              exit 1
-            fi
-            
-            # Fetch RDS creds from Secrets Manager
-            RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --region $AWS_REGION --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }
+            RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }
             DB_USER=$(echo $RDS_CREDS | jq -r .username)
             DB_PASS=$(echo $RDS_CREDS | jq -r .password)
             
-            # Create/update .env
             if [ ! -f .env.example ]; then
               echo "Error: .env.example not found in repo."
               exit 1
@@ -103,14 +62,11 @@ jobs:
             sed -i "s/DB_USERNAME=.*/DB_USERNAME=$DB_USER/" .env
             sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
             
-            # Generate app key and cache config
             php artisan key:generate || { echo "Artisan key:generate failed"; exit 1; }
             php artisan config:cache || { echo "Artisan config:cache failed"; exit 1; }
             
-            # Run migrations (force for production)
             php artisan migrate --force || { echo "Artisan migrate failed"; exit 1; }
             
-            # Restart Nginx
             sudo systemctl restart nginx || { echo "Nginx restart failed"; exit 1; }
             
             echo "Deployment completed successfully."
