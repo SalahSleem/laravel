@@ -51,6 +51,8 @@ jobs:
               sudo apt-get update -y
               sudo apt-get install -y mysql-client
             fi
+            # Set default region for AWS CLI
+            export AWS_DEFAULT_REGION="${AWS_REGION:-us-east-1}"
 
             # Fetch RDS username/password from AWS Secrets Manager
             echo "Fetching RDS credentials from AWS Secrets Manager..."
