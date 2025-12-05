@@ -17,7 +17,7 @@ jobs:
         env:
           BACKEND_HOST: ${{ secrets.BACKEND_HOST }}
           RDS_ENDPOINT: ${{ secrets.RDS_ENDPOINT }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}  # Add this: Set to your AWS region (e.g., us-east-1)
+          AWS_REGION: ${{ secrets.AWS_REGION }}  # Ensure this secret is set in GitHub (e.g., us-east-1)
         with:
           host: ${{ secrets.BACKEND_HOST }}
           username: ubuntu
@@ -73,6 +73,12 @@ jobs:
               exit 1
             fi
             composer install --no-dev --optimize-autoloader || { echo "Composer install failed"; exit 1; }
+            
+            # Check if AWS_REGION is set
+            if [ -z "$AWS_REGION" ]; then
+              echo "Error: AWS_REGION is not set. Please add the AWS_REGION secret in GitHub (e.g., us-east-1)."
+              exit 1
+            fi
             
             # Fetch RDS creds from Secrets Manager
             RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --region $AWS_REGION --query SecretString --output text) || { echo "AWS Secrets Manager failed"; exit 1; }
