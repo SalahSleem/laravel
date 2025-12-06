@@ -10,11 +10,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2️⃣ Copy code to EC2
       - name: Copy code to EC2
         uses: appleboy/scp-action@v0.1.4
         with:
@@ -25,7 +23,6 @@ jobs:
           target: "/var/www/backend"
           strip_components: 0
 
-      # 3️⃣ Deploy via SSH
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.0
         with:
@@ -38,7 +35,6 @@ jobs:
           script: |
             set -e
             cd /var/www/backend
-
             echo "🚀 Starting Laravel deployment"
 
             # 1️⃣ Install Apache + PHP only if not installed
