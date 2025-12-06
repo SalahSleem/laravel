@@ -24,7 +24,7 @@ jobs:
             
             # Ensure repo is cloned (for first deploy)
             if [ ! -d .git ]; then
-              git clone https://github.com/your-username/your-repo.git .  # Replace with your repo URL
+              git clone https://github.com/SalahSleem/larvel.git .  # Replace with your repo URL
             fi
             
             # Pull latest changes from the triggering branch
