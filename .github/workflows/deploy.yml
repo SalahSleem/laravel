@@ -8,6 +8,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -18,9 +19,9 @@ jobs:
           host: ${{ secrets.BACKEND_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "."  # Copy the entire checked-out repo
-          target: "/var/www/backend"  # Destination on EC2
-          strip_components: 0  # Keep the full directory structure
+          source: "."
+          target: "/var/www/backend"
+          strip_components: 0
 
       - name: Deploy to Backend EC2
         uses: appleboy/ssh-action@v1.0.0
@@ -29,74 +30,74 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            set -e  # Exit on any error
+            set -e
             cd /var/www/backend
-            
-            # Check and upgrade PHP version if needed (require 8.2+ for Laravel 12.x)
-            PHP_VERSION=$(php -r "echo PHP_VERSION;")
-            if [[ "$PHP_VERSION" < "8.2" ]]; then
-              echo "PHP version $PHP_VERSION is too old. Upgrading to PHP 8.2+..."
-              sudo apt update
-              sudo apt install -y software-properties-common
-              sudo add-apt-repository -y ppa:ondrej/php
-              sudo apt update
-              sudo apt install -y php8.2 php8.2-cli php8.2-common php8.2-mysql php8.2-zip php8.2-gd php8.2-mbstring php8.2-curl php8.2-xml php8.2-bcmath php8.2-intl  # Added php8.2-intl for Normalizer class
-              sudo update-alternatives --set php /usr/bin/php8.2
-              sudo systemctl restart nginx  # Restart Nginx to use new PHP
-              # Verify upgrade
-              NEW_PHP_VERSION=$(php -r "echo PHP_VERSION;")
-              if [[ "$NEW_PHP_VERSION" < "8.2" ]]; then
-                echo "Error: PHP upgrade failed. Current version: $NEW_PHP_VERSION. Please upgrade manually."
-                exit 1
-              fi
-              echo "PHP upgraded successfully to $NEW_PHP_VERSION."
-            else
-              echo "PHP version $PHP_VERSION is sufficient."
-            fi
-            
-            # Install dependencies
-            composer install --no-dev --optimize-autoloader
-            
-            # Fetch RDS creds from Secrets Manager
-            RDS_CREDS=$(aws secretsmanager get-secret-value --secret-id task/rds/creds --query SecretString --output text)
-            DB_USER=$(echo $RDS_CREDS | jq -r .username)
-            DB_PASS=$(echo $RDS_CREDS | jq -r .password)
-            
-            # Create/update .env
+
+            echo "✅ Installing required PHP 8.2 packages (CLI + FPM + intl)"
+            sudo apt update
+            sudo apt install -y software-properties-common
+            sudo add-apt-repository -y ppa:ondrej/php
+            sudo apt update
+
+            sudo apt install -y \
+              php8.2 php8.2-cli php8.2-fpm php8.2-common \
+              php8.2-mysql php8.2-zip php8.2-gd php8.2-mbstring \
+              php8.2-curl php8.2-xml php8.2-bcmath php8.2-intl
+
+            sudo update-alternatives --set php /usr/bin/php8.2
+
+            echo "✅ Restarting PHP-FPM and Nginx"
+            sudo systemctl restart php8.2-fpm
+            sudo systemctl restart nginx
+
+            echo "✅ Verifying PHP version"
+            php -v
+
+            echo "✅ Installing Composer dependencies"
+            export COMPOSER_ALLOW_SUPERUSER=1
+            composer install --no-dev --optimize-autoloader --no-interaction
+
+            echo "✅ Fetching RDS credentials"
+            RDS_CREDS=$(aws secretsmanager get-secret-value \
+              --secret-id task/rds/creds \
+              --query SecretString \
+              --output text)
+
+            DB_USER=$(echo "$RDS_CREDS" | jq -r .username)
+            DB_PASS=$(echo "$RDS_CREDS" | jq -r .password)
+
+            echo "✅ Preparing .env"
             if [ ! -f .env ]; then
               cp .env.example .env
             fi
-            
-            # Uncomment DB lines (in case they are commented in .env.example)
-            sed -i 's/# DB_HOST/DB_HOST/' .env
-            sed -i 's/# DB_PORT/DB_PORT/' .env
-            sed -i 's/# DB_DATABASE/DB_DATABASE/' .env
-            sed -i 's/# DB_USERNAME/DB_USERNAME/' .env
-            sed -i 's/# DB_PASSWORD/DB_PASSWORD/' .env
-            
-            # Update .env with production values
+
             sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
             sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
-            sed -i 's|APP_URL=.*|APP_URL=http://'${{ secrets.BACKEND_HOST }}'|' .env
+            sed -i "s|APP_URL=.*|APP_URL=http://${{ secrets.BACKEND_HOST }}|" .env
+
             sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
-            sed -i 's/DB_HOST=.*/DB_HOST='${{ secrets.RDS_ENDPOINT }}'/' .env
+            sed -i "s/DB_HOST=.*/DB_HOST=${{ secrets.RDS_ENDPOINT }}/" .env
             sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
             sed -i 's/DB_DATABASE=.*/DB_DATABASE=taskdb/' .env
-            sed -i 's/DB_USERNAME=.*/DB_USERNAME='$DB_USER'/' .env
-            sed -i 's/DB_PASSWORD=.*/DB_PASSWORD='$DB_PASS'/' .env
-            
-            # Secure .env file
+            sed -i "s/DB_USERNAME=.*/DB_USERNAME=${DB_USER}/" .env
+            sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=${DB_PASS}/" .env
+
             chmod 600 .env
-            
-            # Generate app key and cache config
-            php artisan key:generate
+
+            echo "✅ Ensure APP_KEY exists (do NOT rotate on every deploy)"
+            php artisan key:generate --force || true
+
+            echo "✅ Optimizing Laravel"
+            php artisan config:clear
             php artisan config:cache
-            
-            # Clear any old caches
-            php artisan cache:clear
-            
-            # Run migrations
+            php artisan route:cache
+            php artisan view:cache
+
+            echo "✅ Running migrations"
             php artisan migrate --force
-            
-            # Restart Nginx
-            sudo systemctl restart nginx
+
+            echo "✅ Reloading services"
+            sudo systemctl reload php8.2-fpm
+            sudo systemctl reload nginx
+
+            echo "🚀 Deployment complete"
