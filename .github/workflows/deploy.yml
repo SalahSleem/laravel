@@ -27,19 +27,23 @@ jobs:
       # 3️⃣ Deploy over SSH
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.0
+        env:  # <-- Add this: Define secrets as env vars so they can be passed via 'envs'
+          BACKEND_HOST: ${{ secrets.BACKEND_HOST }}
+          RDS_ENDPOINT: ${{ secrets.RDS_ENDPOINT }}
         with:
           host: ${{ secrets.BACKEND_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: BACKEND_HOST,RDS_ENDPOINT
+          envs: BACKEND_HOST,RDS_ENDPOINT  # This now works since they're defined above
           script: |
             set -e
 
             # ---- ENV ----
             export AWS_REGION=us-east-1
             export AWS_DEFAULT_REGION=us-east-1
-            export BACKEND_HOST="${BACKEND_HOST}"
-            export RDS_ENDPOINT="${RDS_ENDPOINT}"
+            # Remove these exports -- the vars are already set via 'envs'
+            # export BACKEND_HOST="${BACKEND_HOST}"
+            # export RDS_ENDPOINT="${RDS_ENDPOINT}"
 
             if [ -z "$BACKEND_HOST" ] || [ -z "$RDS_ENDPOINT" ]; then
               echo "❌ BACKEND_HOST or RDS_ENDPOINT not set"
