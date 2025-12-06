@@ -53,8 +53,11 @@ jobs:
 
             sudo update-alternatives --set php /usr/bin/php8.2
 
+            echo "✅ Enable Apache rewrite module"
+            sudo a2enmod rewrite
+
             echo "✅ Configure Apache for Laravel"
-            sudo tee /etc/apache2/sites-available/laravel.conf > /dev/null <<'EOF'
+            sudo bash -c "cat > /etc/apache2/sites-available/laravel.conf <<'EOF'
 <VirtualHost *:80>
     ServerAdmin webmaster@localhost
     DocumentRoot /var/www/backend/public
@@ -64,15 +67,17 @@ jobs:
         Require all granted
     </Directory>
 
-    ErrorLog ${APACHE_LOG_DIR}/laravel_error.log
-    CustomLog ${APACHE_LOG_DIR}/laravel_access.log combined
+    ErrorLog \${APACHE_LOG_DIR}/laravel_error.log
+    CustomLog \${APACHE_LOG_DIR}/laravel_access.log combined
 </VirtualHost>
-EOF
+EOF"
 
+            echo "✅ Enable Laravel site and disable default site"
             sudo a2dissite 000-default.conf || true
             sudo a2ensite laravel.conf
-            sudo a2enmod rewrite
-            sudo systemctl reload apache2
+
+            echo "✅ Restart Apache"
+            sudo systemctl restart apache2
 
             echo "✅ Install Composer dependencies"
             export COMPOSER_ALLOW_SUPERUSER=1
@@ -110,6 +115,8 @@ EOF
 
             echo "✅ Ensure cache table exists (for CACHE_DRIVER=database)"
             php artisan cache:table || true
+
+            echo "✅ Run migrations"
             php artisan migrate --force
 
             echo "✅ Clear and cache configs"
