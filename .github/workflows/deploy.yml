@@ -56,8 +56,8 @@ jobs:
             echo "✅ Enable Apache rewrite module"
             sudo a2enmod rewrite
 
-            echo "✅ Configure Apache for Laravel"
-            sudo bash -c "cat > /etc/apache2/sites-available/laravel.conf <<'EOF'
+            echo "✅ Configure Apache virtual host for Laravel"
+            sudo tee /etc/apache2/sites-available/laravel.conf > /dev/null <<EOF
 <VirtualHost *:80>
     ServerAdmin webmaster@localhost
     DocumentRoot /var/www/backend/public
@@ -70,13 +70,10 @@ jobs:
     ErrorLog \${APACHE_LOG_DIR}/laravel_error.log
     CustomLog \${APACHE_LOG_DIR}/laravel_access.log combined
 </VirtualHost>
-EOF"
+EOF
 
-            echo "✅ Enable Laravel site and disable default site"
             sudo a2dissite 000-default.conf || true
             sudo a2ensite laravel.conf
-
-            echo "✅ Restart Apache"
             sudo systemctl restart apache2
 
             echo "✅ Install Composer dependencies"
@@ -100,7 +97,6 @@ EOF"
             sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
             sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
             sed -i "s|APP_URL=.*|APP_URL=http://${{ secrets.BACKEND_HOST }}|" .env
-
             sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
             sed -i "s/DB_HOST=.*/DB_HOST=${{ secrets.RDS_ENDPOINT }}/" .env
             sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
