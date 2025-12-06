@@ -77,27 +77,30 @@ jobs:
               cp .env.example .env
             fi
 
+            # Set production environment
             sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
             sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
             sed -i "s|APP_URL=.*|APP_URL=http://${{ secrets.BACKEND_HOST }}|" .env
 
-            sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
-            sed -i "s/DB_HOST=.*/DB_HOST=${{ secrets.RDS_ENDPOINT }}/" .env
-            sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
-            sed -i 's/DB_DATABASE=.*/DB_DATABASE=taskdb/' .env
-            sed -i "s/DB_USERNAME=.*/DB_USERNAME=${DB_USER}/" .env
-            sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=${DB_PASS}/" .env
+            # Update DB configuration (uncomment and set values)
+            sed -i "s|^#* DB_CONNECTION=.*|DB_CONNECTION=mysql|" .env
+            sed -i "s|^#* DB_HOST=.*|DB_HOST=${{ secrets.RDS_ENDPOINT }}|" .env
+            sed -i "s|^#* DB_PORT=.*|DB_PORT=3306|" .env
+            sed -i "s|^#* DB_DATABASE=.*|DB_DATABASE=taskdb|" .env
+            sed -i "s|^#* DB_USERNAME=.*|DB_USERNAME=${DB_USER}|" .env
+            sed -i "s|^#* DB_PASSWORD=.*|DB_PASSWORD=${DB_PASS}|" .env
 
             chmod 600 .env
 
-            echo "✅ Ensure APP_KEY exists"
-            php artisan key:generate --force || true
-
-            echo "✅ Optimize Laravel"
+            echo "✅ Clear and cache Laravel configuration"
             php artisan config:clear
+            php artisan cache:clear
+            php artisan route:clear
+            php artisan view:clear
             php artisan config:cache
-            php artisan route:cache
-            php artisan view:cache
+
+            echo "✅ Ensure APP_KEY exists"
+            php artisan key:generate --force
 
             echo "✅ Run migrations"
             php artisan migrate --force
