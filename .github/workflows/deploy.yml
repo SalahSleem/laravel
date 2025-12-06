@@ -32,6 +32,13 @@ jobs:
             set -e  # Exit on any error
             cd /var/www/backend
             
+            # Check PHP version (require 8.2+ for Laravel 12.x)
+            PHP_VERSION=$(php -r "echo PHP_VERSION;")
+            if [[ $(echo "$PHP_VERSION < 8.2" | bc -l) -eq 1 ]]; then
+              echo "Error: PHP version $PHP_VERSION is too old. Laravel 12.x requires PHP ^8.2. Please upgrade PHP on EC2."
+              exit 1
+            fi
+            
             # Install dependencies
             composer install --no-dev --optimize-autoloader
             
