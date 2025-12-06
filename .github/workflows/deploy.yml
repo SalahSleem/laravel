@@ -10,11 +10,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout code
+      # 1️⃣ Checkout
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2️⃣ Copy code to EC2
+      # 2️⃣ Copy project to EC2
       - name: Copy code to EC2
         uses: appleboy/scp-action@v0.1.4
         with:
@@ -23,86 +23,80 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           source: "."
           target: "/var/www/backend"
-          strip_components: 0
 
-      # 3️⃣ Deploy via SSH
+      # 3️⃣ Deploy over SSH
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.BACKEND_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: BACKEND_HOST,RDS_ENDPOINT
           script: |
             set -e
-            # Export secrets inside SSH session
-            export BACKEND_HOST=${{ secrets.BACKEND_HOST }}
-            export RDS_ENDPOINT=${{ secrets.RDS_ENDPOINT }}
+
+            # ---- ENV ----
+            export AWS_REGION=us-east-1
+            export AWS_DEFAULT_REGION=us-east-1
+            export BACKEND_HOST="${BACKEND_HOST}"
+            export RDS_ENDPOINT="${RDS_ENDPOINT}"
+
+            if [ -z "$BACKEND_HOST" ] || [ -z "$RDS_ENDPOINT" ]; then
+              echo "❌ BACKEND_HOST or RDS_ENDPOINT not set"
+              exit 1
+            fi
 
             cd /var/www/backend
-            echo "🚀 Starting Laravel deployment"
+            echo "✅ Starting deployment"
 
-            # Install Apache + PHP only if not installed
-            if ! command -v php >/dev/null 2>&1; then
-              echo "✅ Installing Apache + PHP 8.2"
+            # ---- SYSTEM DEPENDENCIES ----
+            if ! command -v php >/dev/null; then
               sudo apt update
-              sudo apt install -y software-properties-common
+              sudo apt install -y software-properties-common jq
               sudo add-apt-repository -y ppa:ondrej/php
               sudo apt update
-              sudo apt install -y apache2 php8.2 libapache2-mod-php8.2 \
+              sudo apt install -y \
+                apache2 php8.2 libapache2-mod-php8.2 \
                 php8.2-cli php8.2-mysql php8.2-zip php8.2-gd \
-                php8.2-mbstring php8.2-curl php8.2-xml php8.2-bcmath php8.2-intl jq
-              sudo update-alternatives --set php /usr/bin/php8.2
+                php8.2-mbstring php8.2-curl php8.2-xml \
+                php8.2-bcmath php8.2-intl
               sudo a2enmod rewrite
               sudo systemctl restart apache2
             fi
 
-            # Install Composer dependencies
+            # ---- COMPOSER ----
             export COMPOSER_ALLOW_SUPERUSER=1
             composer install --no-dev --optimize-autoloader --no-interaction
 
-            # Ensure .env exists
-            if [ ! -f .env ]; then
-              cp .env.example .env
-            fi
-            
-             export AWS_DEFAULT_REGION=us-east-1
-             export AWS_REGION=us-east-1
+            # ---- ENV FILE ----
+            [ -f .env ] || cp .env.example .env
 
-            # Fetch RDS credentials
+            echo "✅ Fetching RDS credentials"
             RDS_CREDS=$(aws secretsmanager get-secret-value \
               --secret-id task/rds/creds \
               --query SecretString \
               --output text)
+
             DB_USER=$(echo "$RDS_CREDS" | jq -r .username)
             DB_PASS=$(echo "$RDS_CREDS" | jq -r .password)
 
-            # Update .env
             sed -i "s|DB_HOST=.*|DB_HOST=$RDS_ENDPOINT|" .env
             sed -i "s|DB_PORT=.*|DB_PORT=3306|" .env
             sed -i "s|DB_DATABASE=.*|DB_DATABASE=taskdb|" .env
             sed -i "s|DB_USERNAME=.*|DB_USERNAME=$DB_USER|" .env
             sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=$DB_PASS|" .env
             sed -i "s|APP_URL=.*|APP_URL=http://$BACKEND_HOST|" .env
+
             chmod 600 .env
 
-            # Ensure APP_KEY exists
+            # ---- LARAVEL ----
             php artisan key:generate --force || true
-
-            # Clear and cache configs
-            php artisan config:clear
-            php artisan cache:clear
-            php artisan route:clear
-            php artisan view:clear
-            php artisan config:cache
-
-            # Run migrations
             php artisan migrate --force
+            php artisan optimize
 
-            # Setup Apache virtual host
+            # ---- APACHE ----
             chmod +x setup_apache.sh
             sudo ./setup_apache.sh
-
-            # Reload Apache
             sudo systemctl reload apache2
 
-            echo "🚀 Laravel deployment completed successfully"
+            echo "🚀 Deployment successful"
