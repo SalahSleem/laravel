@@ -10,9 +10,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ Checkout code
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # 2️⃣ Copy code to EC2
       - name: Copy code to EC2
         uses: appleboy/scp-action@v0.1.4
         with:
@@ -23,21 +25,23 @@ jobs:
           target: "/var/www/backend"
           strip_components: 0
 
+      # 3️⃣ Deploy via SSH
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.BACKEND_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          env:
-            BACKEND_HOST: ${{ secrets.BACKEND_HOST }}
-            RDS_ENDPOINT: ${{ secrets.RDS_ENDPOINT }}
           script: |
             set -e
+            # Export secrets inside SSH session
+            export BACKEND_HOST=${{ secrets.BACKEND_HOST }}
+            export RDS_ENDPOINT=${{ secrets.RDS_ENDPOINT }}
+
             cd /var/www/backend
             echo "🚀 Starting Laravel deployment"
 
-            # 1️⃣ Install Apache + PHP only if not installed
+            # Install Apache + PHP only if not installed
             if ! command -v php >/dev/null 2>&1; then
               echo "✅ Installing Apache + PHP 8.2"
               sudo apt update
@@ -52,18 +56,16 @@ jobs:
               sudo systemctl restart apache2
             fi
 
-            # 2️⃣ Install Composer dependencies
-            echo "✅ Installing Composer dependencies"
+            # Install Composer dependencies
             export COMPOSER_ALLOW_SUPERUSER=1
             composer install --no-dev --optimize-autoloader --no-interaction
 
-            # 3️⃣ Ensure .env exists
+            # Ensure .env exists
             if [ ! -f .env ]; then
               cp .env.example .env
             fi
 
-            # 4️⃣ Fetch RDS credentials from Secrets Manager
-            echo "✅ Fetching RDS credentials"
+            # Fetch RDS credentials
             RDS_CREDS=$(aws secretsmanager get-secret-value \
               --secret-id task/rds/creds \
               --query SecretString \
@@ -71,8 +73,7 @@ jobs:
             DB_USER=$(echo "$RDS_CREDS" | jq -r .username)
             DB_PASS=$(echo "$RDS_CREDS" | jq -r .password)
 
-            # 5️⃣ Update .env safely using environment variables
-            echo "✅ Updating .env"
+            # Update .env
             sed -i "s|DB_HOST=.*|DB_HOST=$RDS_ENDPOINT|" .env
             sed -i "s|DB_PORT=.*|DB_PORT=3306|" .env
             sed -i "s|DB_DATABASE=.*|DB_DATABASE=taskdb|" .env
@@ -81,25 +82,24 @@ jobs:
             sed -i "s|APP_URL=.*|APP_URL=http://$BACKEND_HOST|" .env
             chmod 600 .env
 
-            # 6️⃣ Ensure APP_KEY exists
+            # Ensure APP_KEY exists
             php artisan key:generate --force || true
 
-            # 7️⃣ Clear and cache configs
+            # Clear and cache configs
             php artisan config:clear
             php artisan cache:clear
             php artisan route:clear
             php artisan view:clear
             php artisan config:cache
 
-            # 8️⃣ Run migrations
+            # Run migrations
             php artisan migrate --force
 
-            # 9️⃣ Run setup script for Apache (configures virtual host)
-            echo "✅ Running setup_apache.sh"
+            # Setup Apache virtual host
             chmod +x setup_apache.sh
             sudo ./setup_apache.sh
 
-            # 10️⃣ Reload Apache to apply changes
+            # Reload Apache
             sudo systemctl reload apache2
 
             echo "🚀 Laravel deployment completed successfully"
