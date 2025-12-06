@@ -56,12 +56,32 @@ jobs:
             echo "✅ Enable Apache rewrite module"
             sudo a2enmod rewrite
 
-            echo "✅ Restart Apache"
+            echo "✅ Setup Apache virtual host"
+            APACHE_CONF="/etc/apache2/sites-available/laravel.conf"
+            sudo rm -f "$APACHE_CONF"
+            sudo bash -c "cat > $APACHE_CONF" <<'EOF'
+<VirtualHost *:80>
+    ServerAdmin webmaster@localhost
+    DocumentRoot /var/www/backend/public
+    <Directory /var/www/backend/public>
+        AllowOverride All
+        Require all granted
+    </Directory>
+    ErrorLog ${APACHE_LOG_DIR}/laravel_error.log
+    CustomLog ${APACHE_LOG_DIR}/laravel_access.log combined
+</VirtualHost>
+EOF
+            sudo a2ensite laravel.conf
             sudo systemctl restart apache2
 
             echo "✅ Install Composer dependencies"
             export COMPOSER_ALLOW_SUPERUSER=1
             composer install --no-dev --optimize-autoloader --no-interaction
+
+            echo "✅ Ensure .env exists"
+            if [ ! -f .env ]; then
+              cp .env.example .env
+            fi
 
             echo "✅ Fetch RDS credentials"
             RDS_CREDS=$(aws secretsmanager get-secret-value \
@@ -72,15 +92,10 @@ jobs:
             DB_USER=$(echo "$RDS_CREDS" | jq -r .username)
             DB_PASS=$(echo "$RDS_CREDS" | jq -r .password)
 
-            echo "✅ Prepare .env"
-            if [ ! -f .env ]; then
-              cp .env.example .env
-            fi
-
+            echo "✅ Update .env"
             sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
             sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
             sed -i "s|APP_URL=.*|APP_URL=http://${{ secrets.BACKEND_HOST }}|" .env
-
             sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
             sed -i "s/DB_HOST=.*/DB_HOST=${{ secrets.RDS_ENDPOINT }}/" .env
             sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
@@ -93,13 +108,8 @@ jobs:
             echo "✅ Ensure APP_KEY exists"
             php artisan key:generate --force || true
 
-            echo "✅ Ensure cache table exists (for CACHE_DRIVER=database)"
-            php artisan cache:table || true
-
-            echo "✅ Run migrations"
+            echo "✅ Run migrations and optimize"
             php artisan migrate --force
-
-            echo "✅ Clear and cache configs"
             php artisan config:clear
             php artisan cache:clear
             php artisan route:clear
