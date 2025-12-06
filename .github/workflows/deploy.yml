@@ -10,19 +10,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ Checkout your code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Copy shell scripts from repo
+      # 2️⃣ Copy the shell script from repo to EC2
+      - name: Copy setup_apache.sh to EC2
         uses: appleboy/scp-action@v0.1.4
         with:
           host: ${{ secrets.BACKEND_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "scripts/"
-          target: "/home/ubuntu/scripts"
+          source: "setup_apache.sh"
+          target: "/home/ubuntu/setup_apache.sh"
           strip_components: 0
 
+      # 3️⃣ Deploy Laravel backend
       - name: Deploy to Backend EC2
         uses: appleboy/ssh-action@v1.0.0
         with:
@@ -69,7 +72,6 @@ jobs:
             sed -i 's/^APP_ENV=.*/APP_ENV=production/' .env
             sed -i 's/^APP_DEBUG=.*/APP_DEBUG=false/' .env
             sed -i "s|^APP_URL=.*|APP_URL=http://${{ secrets.BACKEND_HOST }}|" .env
-
             chmod 600 .env
 
             echo "✅ Ensure APP_KEY exists"
@@ -83,8 +85,8 @@ jobs:
             php artisan view:clear
             php artisan config:cache
 
-            echo "✅ Apply Apache config"
-            sudo bash /home/ubuntu/scripts/setup_apache.sh
+            echo "✅ Apply Apache virtual host from setup_apache.sh"
+            sudo bash /home/ubuntu/setup_apache.sh
 
             sudo systemctl reload apache2
 
