@@ -37,7 +37,7 @@ jobs:
             export AWS_DEFAULT_REGION=us-east-1
             export AWS_REGION=us-east-1
 
-            echo "✅ Install Apache + PHP 8.2"
+            echo "✅ Install Apache + PHP 8.2 (mod_php)"
             sudo apt update
             sudo apt install -y software-properties-common
             sudo add-apt-repository -y ppa:ondrej/php
@@ -56,23 +56,7 @@ jobs:
             echo "✅ Enable Apache rewrite module"
             sudo a2enmod rewrite
 
-            echo "✅ Configure Apache for Laravel"
-            APACHE_CONF="/etc/apache2/sites-available/laravel.conf"
-            sudo rm -f "$APACHE_CONF"
-
-            sudo bash -c "echo '<VirtualHost *:80>' >> $APACHE_CONF"
-            sudo bash -c "echo '    ServerAdmin webmaster@localhost' >> $APACHE_CONF"
-            sudo bash -c "echo '    DocumentRoot /var/www/backend/public' >> $APACHE_CONF"
-            sudo bash -c "echo '    <Directory /var/www/backend/public>' >> $APACHE_CONF"
-            sudo bash -c "echo '        AllowOverride All' >> $APACHE_CONF"
-            sudo bash -c "echo '        Require all granted' >> $APACHE_CONF"
-            sudo bash -c "echo '    </Directory>' >> $APACHE_CONF"
-            sudo bash -c "echo '    ErrorLog \${APACHE_LOG_DIR}/laravel_error.log' >> $APACHE_CONF"
-            sudo bash -c "echo '    CustomLog \${APACHE_LOG_DIR}/laravel_access.log combined' >> $APACHE_CONF"
-            sudo bash -c "echo '</VirtualHost>' >> $APACHE_CONF"
-
-            sudo a2dissite 000-default.conf || true
-            sudo a2ensite laravel.conf
+            echo "✅ Restart Apache"
             sudo systemctl restart apache2
 
             echo "✅ Install Composer dependencies"
@@ -96,6 +80,7 @@ jobs:
             sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
             sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
             sed -i "s|APP_URL=.*|APP_URL=http://${{ secrets.BACKEND_HOST }}|" .env
+
             sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
             sed -i "s/DB_HOST=.*/DB_HOST=${{ secrets.RDS_ENDPOINT }}/" .env
             sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
