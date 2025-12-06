@@ -23,16 +23,7 @@ jobs:
           target: "/var/www/backend"
           strip_components: 0
 
-      - name: Copy and execute Apache setup script
-        uses: appleboy/scp-action@v0.1.4
-        with:
-          host: ${{ secrets.BACKEND_HOST }}
-          username: ubuntu
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "scripts/setup_apache.sh"
-          target: "/var/www/backend/scripts/setup_apache.sh"
-
-      - name: Deploy Laravel Backend
+      - name: Deploy to Backend EC2
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.BACKEND_HOST }}
@@ -51,6 +42,7 @@ jobs:
             sudo apt install -y software-properties-common
             sudo add-apt-repository -y ppa:ondrej/php
             sudo apt update
+
             sudo apt install -y \
               apache2 \
               php8.2 libapache2-mod-php8.2 \
@@ -61,6 +53,28 @@ jobs:
 
             sudo update-alternatives --set php /usr/bin/php8.2
 
+            echo "✅ Enable Apache rewrite module"
+            sudo a2enmod rewrite
+
+            echo "✅ Configure Apache for Laravel"
+            APACHE_CONF="/etc/apache2/sites-available/laravel.conf"
+            sudo rm -f "$APACHE_CONF"
+
+            sudo bash -c "echo '<VirtualHost *:80>' >> $APACHE_CONF"
+            sudo bash -c "echo '    ServerAdmin webmaster@localhost' >> $APACHE_CONF"
+            sudo bash -c "echo '    DocumentRoot /var/www/backend/public' >> $APACHE_CONF"
+            sudo bash -c "echo '    <Directory /var/www/backend/public>' >> $APACHE_CONF"
+            sudo bash -c "echo '        AllowOverride All' >> $APACHE_CONF"
+            sudo bash -c "echo '        Require all granted' >> $APACHE_CONF"
+            sudo bash -c "echo '    </Directory>' >> $APACHE_CONF"
+            sudo bash -c "echo '    ErrorLog \${APACHE_LOG_DIR}/laravel_error.log' >> $APACHE_CONF"
+            sudo bash -c "echo '    CustomLog \${APACHE_LOG_DIR}/laravel_access.log combined' >> $APACHE_CONF"
+            sudo bash -c "echo '</VirtualHost>' >> $APACHE_CONF"
+
+            sudo a2dissite 000-default.conf || true
+            sudo a2ensite laravel.conf
+            sudo systemctl restart apache2
+
             echo "✅ Install Composer dependencies"
             export COMPOSER_ALLOW_SUPERUSER=1
             composer install --no-dev --optimize-autoloader --no-interaction
@@ -70,6 +84,7 @@ jobs:
               --secret-id task/rds/creds \
               --query SecretString \
               --output text)
+
             DB_USER=$(echo "$RDS_CREDS" | jq -r .username)
             DB_PASS=$(echo "$RDS_CREDS" | jq -r .password)
 
@@ -87,6 +102,7 @@ jobs:
             sed -i 's/DB_DATABASE=.*/DB_DATABASE=taskdb/' .env
             sed -i "s/DB_USERNAME=.*/DB_USERNAME=${DB_USER}/" .env
             sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=${DB_PASS}/" .env
+
             chmod 600 .env
 
             echo "✅ Ensure APP_KEY exists"
@@ -105,7 +121,7 @@ jobs:
             php artisan view:clear
             php artisan config:cache
 
-            echo "✅ Execute Apache setup script"
-            sudo bash /var/www/backend/scripts/setup_apache.sh
+            echo "✅ Reload Apache"
+            sudo systemctl reload apache2
 
             echo "🚀 Deployment completed successfully"
