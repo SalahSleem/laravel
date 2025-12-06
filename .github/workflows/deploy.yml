@@ -37,7 +37,7 @@ jobs:
             export AWS_DEFAULT_REGION=us-east-1
             export AWS_REGION=us-east-1
 
-            echo "✅ Install Apache + PHP 8.2 (mod_php)"
+            echo "✅ Install Apache + PHP 8.2"
             sudo apt update
             sudo apt install -y software-properties-common
             sudo add-apt-repository -y ppa:ondrej/php
@@ -53,11 +53,26 @@ jobs:
 
             sudo update-alternatives --set php /usr/bin/php8.2
 
-            echo "✅ Enable Apache rewrite module"
-            sudo a2enmod rewrite
+            echo "✅ Configure Apache for Laravel"
+            sudo tee /etc/apache2/sites-available/laravel.conf > /dev/null <<'EOF'
+<VirtualHost *:80>
+    ServerAdmin webmaster@localhost
+    DocumentRoot /var/www/backend/public
 
-            echo "✅ Restart Apache"
-            sudo systemctl restart apache2
+    <Directory /var/www/backend/public>
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    ErrorLog ${APACHE_LOG_DIR}/laravel_error.log
+    CustomLog ${APACHE_LOG_DIR}/laravel_access.log combined
+</VirtualHost>
+EOF
+
+            sudo a2dissite 000-default.conf || true
+            sudo a2ensite laravel.conf
+            sudo a2enmod rewrite
+            sudo systemctl reload apache2
 
             echo "✅ Install Composer dependencies"
             export COMPOSER_ALLOW_SUPERUSER=1
@@ -93,18 +108,14 @@ jobs:
             echo "✅ Ensure APP_KEY exists"
             php artisan key:generate --force || true
 
-            echo "✅ Ensure cache table exists (for CACHE_DRIVER=database)"
-            php artisan cache:table || true
+            echo "✅ Optimize Laravel"
+            php artisan config:clear
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
 
             echo "✅ Run migrations"
             php artisan migrate --force
-
-            echo "✅ Clear and cache configs"
-            php artisan config:clear
-            php artisan cache:clear
-            php artisan route:clear
-            php artisan view:clear
-            php artisan config:cache
 
             echo "✅ Reload Apache"
             sudo systemctl reload apache2
