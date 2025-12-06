@@ -7,7 +7,7 @@ echo "✅ Set AWS region"
 export AWS_DEFAULT_REGION=us-east-1
 export AWS_REGION=us-east-1
 
-echo "✅ Install Apache + PHP 8.2 (mod_php)"
+echo "✅ Install Apache + PHP 8.2 (mod_php) and dependencies"
 sudo apt update
 sudo apt install -y software-properties-common
 sudo add-apt-repository -y ppa:ondrej/php
@@ -26,7 +26,7 @@ echo "✅ Enable Apache rewrite module"
 sudo a2enmod rewrite
 
 echo "✅ Configure Apache virtual host for Laravel"
-sudo tee /etc/apache2/sites-available/000-default.conf > /dev/null <<'EOF'
+sudo tee /etc/apache2/sites-available/000-default.conf > /dev/null <<EOF
 <VirtualHost *:80>
     ServerAdmin webmaster@localhost
     DocumentRoot /var/www/backend/public
@@ -36,8 +36,8 @@ sudo tee /etc/apache2/sites-available/000-default.conf > /dev/null <<'EOF'
         Require all granted
     </Directory>
 
-    ErrorLog ${APACHE_LOG_DIR}/laravel_error.log
-    CustomLog ${APACHE_LOG_DIR}/laravel_access.log combined
+    ErrorLog \${APACHE_LOG_DIR}/laravel_error.log
+    CustomLog \${APACHE_LOG_DIR}/laravel_access.log combined
 </VirtualHost>
 EOF
 
@@ -48,7 +48,14 @@ echo "✅ Install Composer dependencies"
 export COMPOSER_ALLOW_SUPERUSER=1
 composer install --no-dev --optimize-autoloader --no-interaction
 
-echo "✅ Fetch RDS credentials"
+# --- RDS Credentials ---
+echo "✅ Fetch RDS credentials from environment variables"
+# Make sure GitHub Actions passes BACKEND_HOST and RDS_ENDPOINT as env
+if [ -z "$BACKEND_HOST" ] || [ -z "$RDS_ENDPOINT" ]; then
+  echo "❌ BACKEND_HOST or RDS_ENDPOINT not set"
+  exit 1
+fi
+
 RDS_CREDS=$(aws secretsmanager get-secret-value \
   --secret-id task/rds/creds \
   --query SecretString \
@@ -57,6 +64,7 @@ RDS_CREDS=$(aws secretsmanager get-secret-value \
 DB_USER=$(echo "$RDS_CREDS" | jq -r .username)
 DB_PASS=$(echo "$RDS_CREDS" | jq -r .password)
 
+# --- Setup .env ---
 echo "✅ Prepare .env"
 if [ ! -f .env ]; then
   cp .env.example .env
@@ -64,14 +72,14 @@ fi
 
 sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
 sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
-sed -i "s|APP_URL=.*|APP_URL=http://${{ secrets.BACKEND_HOST }}|" .env
+sed -i "s|APP_URL=.*|APP_URL=http://$BACKEND_HOST|" .env
 
 sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
-sed -i "s/DB_HOST=.*/DB_HOST=${{ secrets.RDS_ENDPOINT }}/" .env
+sed -i "s|DB_HOST=.*|DB_HOST=$RDS_ENDPOINT|" .env
 sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
 sed -i 's/DB_DATABASE=.*/DB_DATABASE=taskdb/' .env
-sed -i "s/DB_USERNAME=.*/DB_USERNAME=${DB_USER}/" .env
-sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=${DB_PASS}/" .env
+sed -i "s|DB_USERNAME=.*|DB_USERNAME=$DB_USER|" .env
+sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=$DB_PASS|" .env
 
 chmod 600 .env
 
@@ -85,7 +93,7 @@ echo "⏱ Waiting 5s to ensure DB connection is ready"
 sleep 5
 
 echo "✅ Test DB connection"
-php -r "new PDO('mysql:host=${{ secrets.RDS_ENDPOINT }};dbname=taskdb','${DB_USER}','${DB_PASS}'); echo 'DB connection OK';"
+php -r "new PDO('mysql:host=$RDS_ENDPOINT;dbname=taskdb','$DB_USER','$DB_PASS'); echo 'DB connection OK';"
 
 echo "✅ Run migrations"
 php artisan migrate --force
