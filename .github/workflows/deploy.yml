@@ -33,7 +33,16 @@ jobs:
             set -e
             cd /var/www/backend
 
-            echo "✅ Installing required PHP 8.2 packages (CLI + FPM + intl)"
+            echo "✅ Set AWS default region"
+            export AWS_DEFAULT_REGION=us-east-1
+            export AWS_REGION=us-east-1
+
+            echo "✅ Remove Apache to avoid port 80 conflicts"
+            sudo systemctl stop apache2 || true
+            sudo apt purge -y apache2 apache2-utils apache2-bin apache2.2-common || true
+            sudo apt autoremove -y
+
+            echo "✅ Install PHP 8.2 + PHP-FPM (Nginx-compatible only)"
             sudo apt update
             sudo apt install -y software-properties-common
             sudo add-apt-repository -y ppa:ondrej/php
@@ -46,18 +55,14 @@ jobs:
 
             sudo update-alternatives --set php /usr/bin/php8.2
 
-            echo "✅ Restarting PHP-FPM and Nginx"
             sudo systemctl restart php8.2-fpm
             sudo systemctl restart nginx
 
-            echo "✅ Verifying PHP version"
-            php -v
-
-            echo "✅ Installing Composer dependencies"
+            echo "✅ Install Composer dependencies"
             export COMPOSER_ALLOW_SUPERUSER=1
             composer install --no-dev --optimize-autoloader --no-interaction
 
-            echo "✅ Fetching RDS credentials"
+            echo "✅ Fetch RDS credentials"
             RDS_CREDS=$(aws secretsmanager get-secret-value \
               --secret-id task/rds/creds \
               --query SecretString \
@@ -66,7 +71,7 @@ jobs:
             DB_USER=$(echo "$RDS_CREDS" | jq -r .username)
             DB_PASS=$(echo "$RDS_CREDS" | jq -r .password)
 
-            echo "✅ Preparing .env"
+            echo "✅ Prepare .env"
             if [ ! -f .env ]; then
               cp .env.example .env
             fi
@@ -74,7 +79,6 @@ jobs:
             sed -i 's/APP_ENV=.*/APP_ENV=production/' .env
             sed -i 's/APP_DEBUG=.*/APP_DEBUG=false/' .env
             sed -i "s|APP_URL=.*|APP_URL=http://${{ secrets.BACKEND_HOST }}|" .env
-
             sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
             sed -i "s/DB_HOST=.*/DB_HOST=${{ secrets.RDS_ENDPOINT }}/" .env
             sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
@@ -84,20 +88,18 @@ jobs:
 
             chmod 600 .env
 
-            echo "✅ Ensure APP_KEY exists (do NOT rotate on every deploy)"
+            echo "✅ Ensure APP_KEY exists"
             php artisan key:generate --force || true
 
-            echo "✅ Optimizing Laravel"
+            echo "✅ Optimize Laravel"
             php artisan config:clear
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache
 
-            echo "✅ Running migrations"
             php artisan migrate --force
 
-            echo "✅ Reloading services"
             sudo systemctl reload php8.2-fpm
             sudo systemctl reload nginx
 
-            echo "🚀 Deployment complete"
+            echo "🚀 Deployment completed successfully"
