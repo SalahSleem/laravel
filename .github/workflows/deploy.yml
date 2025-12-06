@@ -37,7 +37,7 @@ jobs:
             export AWS_DEFAULT_REGION=us-east-1
             export AWS_REGION=us-east-1
 
-            echo "✅ Install Apache + PHP 8.2"
+            echo "✅ Install Apache + PHP 8.2 (mod_php)"
             sudo apt update
             sudo apt install -y software-properties-common
             sudo add-apt-repository -y ppa:ondrej/php
@@ -108,14 +108,16 @@ EOF
             echo "✅ Ensure APP_KEY exists"
             php artisan key:generate --force || true
 
-            echo "✅ Optimize Laravel"
-            php artisan config:clear
-            php artisan config:cache
-            php artisan route:cache
-            php artisan view:cache
-
-            echo "✅ Run migrations"
+            echo "✅ Ensure cache table exists (for CACHE_DRIVER=database)"
+            php artisan cache:table || true
             php artisan migrate --force
+
+            echo "✅ Clear and cache configs"
+            php artisan config:clear
+            php artisan cache:clear
+            php artisan route:clear
+            php artisan view:clear
+            php artisan config:cache
 
             echo "✅ Reload Apache"
             sudo systemctl reload apache2
