@@ -32,3 +32,25 @@ sudo a2ensite laravel.conf
 sudo systemctl reload apache2
 
 echo "✅ Apache virtual host setup completed"
+cd /var/www/backend
+
+echo "✅ Ensure .env exists"
+if [ ! -f .env ]; then
+  cp .env.example .env
+fi
+
+# Ensure APP_KEY exists
+php artisan key:generate --force || true
+
+# Clear and cache configs
+php artisan config:clear
+php artisan cache:clear
+php artisan route:clear
+php artisan view:clear
+php artisan config:cache
+
+# Create cache table if CACHE_DRIVER=database
+php artisan cache:table || true
+php artisan migrate --force
+
+echo "✅ Laravel database and cache setup complete"
